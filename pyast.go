@@ -347,6 +347,9 @@ func createDependencies(cacher cache.Cacher, hasher hash.Hash, versioner cache.V
 	serialisedClasses, err := cacher.Cache(hasher, func(stdout io.Writer, stderr io.Writer, abort chan []byte) ([]byte, error) {
 		return json.Marshal(extractImportsFromModule(class, string(content)).Lister())
 	}, versioner)
+	if err != nil {
+		log.Fatal(err)
+	}
 	var listOfClasses []string
 	if err = json.Unmarshal(serialisedClasses, &listOfClasses); err != nil {
 		log.Fatalf("While processing %v: %v: %v", class, err, string(serialisedClasses))

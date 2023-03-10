@@ -2,6 +2,10 @@ module github.com/nicois/pyast
 
 go 1.18
 
+replace github.com/nicois/cache => ../cache
+replace github.com/nicois/file => ../file
+replace github.com/nicois/git => ../git
+
 require (
 	github.com/nicois/cache v0.0.0-20230309075418-3aae7a3eee00
 	github.com/nicois/file v0.0.0-20230309073744-e6bf63959c2a
