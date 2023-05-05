@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/getsentry/sentry-go"
+
 	"github.com/nicois/cache"
 	file "github.com/nicois/file"
 	git "github.com/nicois/git"
@@ -97,6 +99,7 @@ func (t *tree) GetDependees(paths file.Paths) (file.Paths, error) {
 		seen := seen{mutex: new(sync.Mutex), nodes: make(Classes)}
 		for path := range paths {
 			if p, err := filepath.Abs(path); err != nil || p != path {
+				sentry.CaptureException(err)
 				log.Fatalf("%v should be absolute already", path)
 			}
 
@@ -104,10 +107,13 @@ func (t *tree) GetDependees(paths file.Paths) (file.Paths, error) {
 				log.Debugf("%v is not contained within %v. Ignoring it.", path, t.root)
 				continue
 			}
-			class := PathToClass(path[len(t.root)+1:])
-			dependees <- class
-			wg.Add(1)
-			go t.getClassDependencies(&wg, seen, class, dependees)
+			if class, err := PathToClass(path[len(t.root)+1:]); err == nil {
+				dependees <- class
+				wg.Add(1)
+				go t.getClassDependencies(&wg, seen, class, dependees)
+			} else {
+				log.Debugln(err)
+			}
 		}
 		wg.Wait()
 		close(dependees)
@@ -164,6 +170,7 @@ func BuildTree(pwg *sync.WaitGroup, c chan tree, g git.Git, pythonRoot string) {
 	defer pwg.Done()
 	pythonRoot, err := filepath.Abs(pythonRoot)
 	if err != nil {
+		sentry.CaptureException(err)
 		log.Fatal(err)
 	}
 	var wg sync.WaitGroup
@@ -233,7 +240,7 @@ func buildDependencies(wg *sync.WaitGroup, g git.Git, pythonRoot string, depPair
 		return
 	}
 	// create cache object w/ lock channel
-	cacher := cache.Create("pyast")
+	cacher, err := cache.Create(context.Background(), "pyast")
 	// FIXME: handle symlinks, either as files or directories
 	filepath.WalkDir(pythonRoot, func(path string, d fs.DirEntry, err error) error {
 		if d.IsDir() {
@@ -279,10 +286,12 @@ func scanPants(wg *sync.WaitGroup, cacher cache.Cacher, depPairs chan depPair, s
 	content, err := file.ReadBytes(path)
 	sem.Release(1)
 	if err != nil {
+		sentry.CaptureException(err)
 		log.Fatalf("While reading %v: %v", path, err)
 	}
 	pants, err := parser.ParseString(path, string(content))
 	if err != nil {
+		sentry.CaptureException(err)
 		log.Fatal(err)
 	}
 	log.Debug(pants)
@@ -309,11 +318,15 @@ func scan(wg *sync.WaitGroup, cacher cache.Cacher, depPairs chan depPair, sem *s
 	content, err := file.ReadBytes(path)
 	sem.Release(1)
 	if err != nil {
+		sentry.CaptureException(err)
 		log.Fatalf("While reading %v: %v", path, err)
 	}
 	hasher := sha256.New()
 	hasher.Write([]byte(path))
-	class := PathToClass(path[len(root)+1:])
+	class, err := PathToClass(path[len(root)+1:])
+	if err != nil {
+		log.Warnln(err)
+	}
 	versioner := cache.Reactive(mtimeVersioner(path))
 	for dep := range createDependencies(cacher, hasher, versioner, class, content) {
 		depPairs <- depPair{importerClass: class, imported: dep, isClass: true}
@@ -381,10 +394,16 @@ func createDependencies(cacher cache.Cacher, hasher hash.Hash, versioner cache.V
 		return json.Marshal(extractImportsFromModule(class, string(content)).Lister())
 	}, versioner)
 	if err != nil {
+		sentry.CaptureException(err)
 		log.Fatal(err)
+	}
+	if len(serialisedClasses) == 0 {
+		log.Debug("No classes found.")
+		return CreateClasses()
 	}
 	var listOfClasses []string
 	if err = json.Unmarshal(serialisedClasses, &listOfClasses); err != nil {
+		sentry.CaptureException(err)
 		log.Fatalf("While processing %v: %v: %v", class, err, string(serialisedClasses))
 	}
 	result := CreateClasses(listOfClasses...)
@@ -410,6 +429,7 @@ func CalculatePythonRoots(paths file.Paths) file.Paths {
 			}
 			dir = filepath.Dir(dir)
 			if !file.DirExists(dir) {
+				sentry.CaptureException(err)
 				log.Fatalf("%v does not exist, while trying to find top-level of %v", dir, path)
 			}
 		}
@@ -418,13 +438,16 @@ func CalculatePythonRoots(paths file.Paths) file.Paths {
 	return result
 }
 
-func PathToClass(path string) string {
+func PathToClass(path string) (string, error) {
+	if !strings.HasSuffix(path, ".py") {
+		return "", fmt.Errorf("'%v' is not a python file", path)
+	}
 	x := strings.ReplaceAll(path, "/", ".")
 	class := x[:len(x)-3]
 	// note: this leaves the __init__ suffix.
 	// This is required to differentiate between
 	// module and package paths.
-	return class
+	return class, nil
 }
 
 func ClassToPath(root string, class string) string {
