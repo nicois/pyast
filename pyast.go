@@ -13,12 +13,12 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/getsentry/sentry-go"
 
 	"github.com/nicois/cache"
 	file "github.com/nicois/file"
-	git "github.com/nicois/git"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/semaphore"
 )
@@ -132,12 +132,12 @@ type depPair struct {
 	isClass       bool   // is the imported object a class? if not, assume it's an absolute path
 }
 
-func BuildTrees(pythonRoots file.Paths, g git.Git) *trees {
+func BuildTrees(pythonRoots file.Paths) *trees {
 	var wg sync.WaitGroup
 	c := make(chan tree)
 	for pythonRoot := range pythonRoots {
 		wg.Add(1)
-		go BuildTree(&wg, c, g, pythonRoot)
+		go BuildTree(&wg, c, pythonRoot)
 	}
 	go func() {
 		wg.Wait()
@@ -166,7 +166,7 @@ func BuildTrees(pythonRoots file.Paths, g git.Git) *trees {
 	return &result
 }
 
-func BuildTree(pwg *sync.WaitGroup, c chan tree, g git.Git, pythonRoot string) {
+func BuildTree(pwg *sync.WaitGroup, c chan tree, pythonRoot string) {
 	defer pwg.Done()
 	pythonRoot, err := filepath.Abs(pythonRoot)
 	if err != nil {
@@ -176,7 +176,7 @@ func BuildTree(pwg *sync.WaitGroup, c chan tree, g git.Git, pythonRoot string) {
 	var wg sync.WaitGroup
 	depPairs := make(chan depPair)
 	wg.Add(1)
-	go buildDependencies(&wg, g, pythonRoot, depPairs)
+	go buildDependencies(&wg, pythonRoot, depPairs)
 	go func() {
 		wg.Wait()
 		close(depPairs)
@@ -229,7 +229,7 @@ func (c *cache) Put(path string, classes Classes) {
 }
 */
 
-func buildDependencies(wg *sync.WaitGroup, g git.Git, pythonRoot string, depPairs chan depPair) {
+func buildDependencies(wg *sync.WaitGroup, pythonRoot string, depPairs chan depPair) {
 	// this controls the maximum number of files being read
 	// concurrently, to avoid "too many open files" errors
 	defer wg.Done()
@@ -240,7 +240,7 @@ func buildDependencies(wg *sync.WaitGroup, g git.Git, pythonRoot string, depPair
 		return
 	}
 	// create cache object w/ lock channel
-	cacher, err := cache.Create(context.Background(), "pyast")
+	cacher, err := cache.Create[time.Time](context.Background(), "pyast")
 	// FIXME: handle symlinks, either as files or directories
 	filepath.WalkDir(pythonRoot, func(path string, d fs.DirEntry, err error) error {
 		if d.IsDir() {
@@ -277,7 +277,7 @@ func stripComments(source string) string {
 	return strings.TrimSpace(result)
 }
 
-func scanPants(wg *sync.WaitGroup, cacher cache.Cacher, depPairs chan depPair, sem *semaphore.Weighted, root string, path string) {
+func scanPants(wg *sync.WaitGroup, cacher cache.Cacher[time.Time], depPairs chan depPair, sem *semaphore.Weighted, root string, path string) {
 	defer wg.Done()
 	if !strings.HasPrefix(path, root) {
 		log.Fatalf("%v does not start with %v, so something is wrong.", path, root)
@@ -306,7 +306,7 @@ func (p *Pants) SendDepPairs(depPairs chan depPair) {
 	*/
 }
 
-func scan(wg *sync.WaitGroup, cacher cache.Cacher, depPairs chan depPair, sem *semaphore.Weighted, root string, path string) {
+func scan(wg *sync.WaitGroup, cacher cache.Cacher[time.Time], depPairs chan depPair, sem *semaphore.Weighted, root string, path string) {
 	/*
 	   Responsible for sending depPairs on the designated channel for the specified python file at `path`.
 	*/
@@ -314,7 +314,10 @@ func scan(wg *sync.WaitGroup, cacher cache.Cacher, depPairs chan depPair, sem *s
 	if !strings.HasPrefix(path, root) {
 		log.Fatalf("%v does not start with %v, so cannot calculate the module path.", path, root)
 	}
-	sem.Acquire(context.Background(), 1)
+	ctx := context.Background()
+	if err := sem.Acquire(ctx, 1); err != nil {
+		return
+	}
 	content, err := file.ReadBytes(path)
 	sem.Release(1)
 	if err != nil {
@@ -327,19 +330,19 @@ func scan(wg *sync.WaitGroup, cacher cache.Cacher, depPairs chan depPair, sem *s
 	if err != nil {
 		log.Warnln(err)
 	}
-	versioner := cache.Reactive(mtimeVersioner(path))
-	for dep := range createDependencies(cacher, hasher, versioner, class, content) {
+	versioner := cache.CreateReactiveListener(mtimeVersioner(path), time.Second/10)
+	for dep := range createDependencies(ctx, cacher, hasher, versioner, class, content) {
 		depPairs <- depPair{importerClass: class, imported: dep, isClass: true}
 	}
 }
 
-func mtimeVersioner(path string) func() ([]byte, error) {
-	return func() ([]byte, error) {
+func mtimeVersioner(path string) func() (time.Time, error) {
+	return func() (time.Time, error) {
 		fileinfo, err := os.Stat(path)
 		if err != nil {
-			return []byte{}, err
+			return time.Time{}, err
 		}
-		return fileinfo.ModTime().MarshalBinary()
+		return fileinfo.ModTime(), nil
 	}
 }
 
@@ -389,8 +392,8 @@ func extractImportsFromModule(class string, content string) Classes {
 	return classes
 }
 
-func createDependencies(cacher cache.Cacher, hasher hash.Hash, versioner cache.Version, class string, content []byte) Classes {
-	serialisedClasses, err := cacher.Cache(hasher, func(stdout io.Writer, stderr io.Writer, abort chan []byte) ([]byte, error) {
+func createDependencies(ctx context.Context, cacher cache.Cacher[time.Time], hasher hash.Hash, versioner cache.Version[time.Time], class string, content []byte) Classes {
+	serialisedClasses, err := cacher.Cache(ctx, hasher, func(ctx context.Context, stdout io.Writer, stderr io.Writer) ([]byte, error) {
 		return json.Marshal(extractImportsFromModule(class, string(content)).Lister())
 	}, versioner)
 	if err != nil {

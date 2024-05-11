@@ -3,12 +3,11 @@ package pyast
 import (
 	"testing"
 
-    	"github.com/alecthomas/repr"
-
+	"github.com/alecthomas/repr"
 )
 
 func TestSimpleParsing(t *testing.T) {
-       build := `
+	build := `
 files(
     name="all-packages",
     sources=["all-packages.json"],
@@ -25,6 +24,6 @@ python_sources(overrides={"admplugin.py": {"dependencies": [":psqlrc"]}})`
 	if err != nil {
 		t.Fatal(err)
 	}
-    t.Log(repr.String(ast))
-    t.Fatalf("%v\n", ast.Overrides())
+	t.Log(repr.String(ast))
+	t.Fatalf("%v\n", ast.Overrides())
 }
