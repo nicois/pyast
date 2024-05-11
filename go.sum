@@ -19,8 +19,8 @@ github.com/hexops/gotextdiff v1.0.3 h1:gitA9+qJrrTCsiCl7+kh75nPqQt1cx4ZkudSTLoUq
 github.com/hexops/gotextdiff v1.0.3/go.mod h1:pSWU5MAI3yDq+fZBTazCSJysOMbxWL1BSow5/V2vxeg=
 github.com/mattn/go-sqlite3 v1.14.22 h1:2gZY6PC6kBnID23Tichd1K+Z0oS6nE/XwU+Vz/5o4kU=
 github.com/mattn/go-sqlite3 v1.14.22/go.mod h1:Uh1q+B4BYcTPb+yiD3kU8Ct7aC0hY9fxUwlHK0RXw+Y=
-github.com/nicois/cache v0.0.0-20240511121925-73be0e90fc2e h1:t5DAMtXCvCOzm97d/325RmtHIDm1w8K5W1fi3PWsFw8=
-github.com/nicois/cache v0.0.0-20240511121925-73be0e90fc2e/go.mod h1:c5z8hWlySgMsGkMkjHohLdyP1G8shCCtd/98yGpvAbs=
+github.com/nicois/cache v0.0.0-20240511132057-f8118ce29fe1 h1:a0wkZ76yUdWmwWqLREQgzTEdh8UKzVn70AC/MZGJ8d0=
+github.com/nicois/cache v0.0.0-20240511132057-f8118ce29fe1/go.mod h1:4a4x1anyjITh3jubbdBrOsIym3cQFDfM1kgAdCHf+/s=
 github.com/nicois/fastdb v0.0.0-20240511060213-776b25c4dbb9 h1:8Q7Qed7vdJ2y2RfcCCHequvFs714moA2Xz2cDMq1rKg=
 github.com/nicois/fastdb v0.0.0-20240511060213-776b25c4dbb9/go.mod h1:JeUba7aNW8L15j+0cRZbzC+B+6lOxcHhKjm8pU/WQQM=
 github.com/nicois/file v0.0.0-20230309073744-e6bf63959c2a h1:jjEbY6pEIaVfDIeJHAtxvLkgRI/XkmFk1nfjbMRCBAc=
