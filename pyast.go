@@ -254,10 +254,6 @@ func buildDependencies(wg *sync.WaitGroup, pythonRoot string, depPairs chan depP
 			wg.Add(1)
 			go scan(wg, cacher, depPairs, sem, pythonRoot, path)
 		}
-		if strings.HasSuffix(path, ".BUILD-wip") {
-			wg.Add(1)
-			go scanPants(wg, cacher, depPairs, sem, pythonRoot, path)
-		}
 		return nil
 	})
 }
@@ -275,35 +271,6 @@ func stripComments(source string) string {
 		return ""
 	})
 	return strings.TrimSpace(result)
-}
-
-func scanPants(wg *sync.WaitGroup, cacher cache.Cacher[time.Time], depPairs chan depPair, sem *semaphore.Weighted, root string, path string) {
-	defer wg.Done()
-	if !strings.HasPrefix(path, root) {
-		log.Fatalf("%v does not start with %v, so something is wrong.", path, root)
-	}
-	sem.Acquire(context.Background(), 1)
-	content, err := file.ReadBytes(path)
-	sem.Release(1)
-	if err != nil {
-		sentry.CaptureException(err)
-		log.Fatalf("While reading %v: %v", path, err)
-	}
-	pants, err := parser.ParseString(path, string(content))
-	if err != nil {
-		sentry.CaptureException(err)
-		log.Fatal(err)
-	}
-	log.Debug(pants)
-	// not going to cache this as it's probably just as fast to parse
-	// depPairs <- depPair{importerClass: class, importedClass: dep, isClass: false}
-	pants.SendDepPairs(depPairs)
-}
-
-func (p *Pants) SendDepPairs(depPairs chan depPair) {
-	/*
-	   python_tests: use overrides to get deps for specific test paths from "metapaths"
-	*/
 }
 
 func scan(wg *sync.WaitGroup, cacher cache.Cacher[time.Time], depPairs chan depPair, sem *semaphore.Weighted, root string, path string) {
@@ -346,6 +313,9 @@ func mtimeVersioner(path string) func() (time.Time, error) {
 	}
 }
 
+// extractImportsFromModule calculates all the "class paths" which are imported by this python code.
+// For example, "import foo" will return {"foo", "foo.__init__"}. It does not matter if some of these
+// don't actually exist.
 func extractImportsFromModule(class string, content string) Classes {
 	reImport := regexp.MustCompile(`(?m)^\s*(?:from[ ]+(\S+)[ ]+)?import[ ]+([^\(]+?|\([^\)]+?\))(?:[ ]+as[ ]+\S+)?[ ]*$`)
 	classes := CreateClasses()
@@ -414,6 +384,11 @@ func createDependencies(ctx context.Context, cacher cache.Cacher[time.Time], has
 	return result
 }
 
+// CalculatePythonRoots handles the situation where a repository contains multiple python projects.
+// Each project has __init__.py in its child directories - so if a directory is found without one,
+// it is a separate project.
+// This function creates a set of these "root" directories, which contain at least one of the
+// input paths and does not contain __init__.py
 func CalculatePythonRoots(paths file.Paths) file.Paths {
 	result := file.CreatePaths()
 	for path := range paths {
