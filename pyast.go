@@ -132,12 +132,12 @@ type depPair struct {
 	isClass       bool   // is the imported object a class? if not, assume it's an absolute path
 }
 
-func BuildTrees(pythonRoots file.Paths) *trees {
+func BuildTrees(ctx context.Context, pythonRoots file.Paths) *trees {
 	var wg sync.WaitGroup
 	c := make(chan tree)
 	for pythonRoot := range pythonRoots {
 		wg.Add(1)
-		go BuildTree(&wg, c, pythonRoot)
+		go BuildTree(ctx, &wg, c, pythonRoot)
 	}
 	go func() {
 		wg.Wait()
@@ -166,7 +166,7 @@ func BuildTrees(pythonRoots file.Paths) *trees {
 	return &result
 }
 
-func BuildTree(pwg *sync.WaitGroup, c chan tree, pythonRoot string) {
+func BuildTree(ctx context.Context, pwg *sync.WaitGroup, c chan tree, pythonRoot string) {
 	defer pwg.Done()
 	pythonRoot, err := filepath.Abs(pythonRoot)
 	if err != nil {
@@ -176,7 +176,7 @@ func BuildTree(pwg *sync.WaitGroup, c chan tree, pythonRoot string) {
 	var wg sync.WaitGroup
 	depPairs := make(chan depPair)
 	wg.Add(1)
-	go buildDependencies(&wg, pythonRoot, depPairs)
+	go buildDependencies(ctx, &wg, pythonRoot, depPairs)
 	go func() {
 		wg.Wait()
 		close(depPairs)
@@ -229,7 +229,7 @@ func (c *cache) Put(path string, classes Classes) {
 }
 */
 
-func buildDependencies(wg *sync.WaitGroup, pythonRoot string, depPairs chan depPair) {
+func buildDependencies(ctx context.Context, wg *sync.WaitGroup, pythonRoot string, depPairs chan depPair) {
 	// this controls the maximum number of files being read
 	// concurrently, to avoid "too many open files" errors
 	defer wg.Done()
@@ -240,7 +240,10 @@ func buildDependencies(wg *sync.WaitGroup, pythonRoot string, depPairs chan depP
 		return
 	}
 	// create cache object w/ lock channel
-	cacher, err := cache.Create[time.Time](context.Background(), "pyast")
+	cacher, err := cache.Create[time.Time](ctx, "pyast")
+	if err != nil {
+		log.Error(err)
+	}
 	// FIXME: handle symlinks, either as files or directories
 	filepath.WalkDir(pythonRoot, func(path string, d fs.DirEntry, err error) error {
 		if d.IsDir() {
@@ -252,7 +255,7 @@ func buildDependencies(wg *sync.WaitGroup, pythonRoot string, depPairs chan depP
 		}
 		if strings.HasSuffix(path, ".py") {
 			wg.Add(1)
-			go scan(wg, cacher, depPairs, sem, pythonRoot, path)
+			go scan(ctx, wg, cacher, depPairs, sem, pythonRoot, path)
 		}
 		return nil
 	})
@@ -273,7 +276,7 @@ func stripComments(source string) string {
 	return strings.TrimSpace(result)
 }
 
-func scan(wg *sync.WaitGroup, cacher cache.Cacher[time.Time], depPairs chan depPair, sem *semaphore.Weighted, root string, path string) {
+func scan(ctx context.Context, wg *sync.WaitGroup, cacher cache.Cacher[time.Time], depPairs chan depPair, sem *semaphore.Weighted, root string, path string) {
 	/*
 	   Responsible for sending depPairs on the designated channel for the specified python file at `path`.
 	*/
@@ -281,7 +284,6 @@ func scan(wg *sync.WaitGroup, cacher cache.Cacher[time.Time], depPairs chan depP
 	if !strings.HasPrefix(path, root) {
 		log.Fatalf("%v does not start with %v, so cannot calculate the module path.", path, root)
 	}
-	ctx := context.Background()
 	if err := sem.Acquire(ctx, 1); err != nil {
 		return
 	}
