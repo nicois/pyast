@@ -1,7 +1,11 @@
 package pyast
 
 import (
+	"context"
+	"path/filepath"
 	"testing"
+
+	file "github.com/nicois/file"
 )
 
 // TestHelloName calls greetings.Hello with a name, checking
@@ -93,5 +97,51 @@ from ..aunt import foo
 from myapp.deploy.services import foo, bar
     `); !CreateClasses("myapp.deploy.services.foo", "myapp.deploy.services.foo.__init__", "myapp.deploy.services", "myapp.deploy.services.bar", "myapp.deploy.services.bar.__init__").SameAs(actual) {
 		t.Fatalf("Found unexpected result:\n%q", actual)
+	}
+}
+
+func TestBuildTreesNamespacePackages(t *testing.T) {
+	root, err := filepath.Abs("testdata/namespace/src")
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := file.CreatePaths(root)
+	ctx := context.Background()
+
+	opts := BuildTreesOptions{NamespacePackages: true}
+	trees := BuildTreesWithOptions(ctx, roots, opts)
+
+	consumerPath := filepath.Join(root, "avn/kafka/consumer.py")
+	deps, err := trees.GetDependees(file.CreatePaths(consumerPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	producerPath := filepath.Join(root, "avn/kafka/producer.py")
+	if _, ok := deps[producerPath]; !ok {
+		t.Errorf("expected producer.py to depend on consumer.py, got: %v", deps)
+	}
+}
+
+func TestBuildTreesBackwardCompat(t *testing.T) {
+	root, err := filepath.Abs("testdata/namespace/src")
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := file.CreatePaths(root)
+	ctx := context.Background()
+
+	// Without namespace packages, the avn/ directory (no __init__.py) should be skipped
+	trees := BuildTrees(ctx, roots)
+
+	consumerPath := filepath.Join(root, "avn/kafka/consumer.py")
+	deps, err := trees.GetDependees(file.CreatePaths(consumerPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	producerPath := filepath.Join(root, "avn/kafka/producer.py")
+	if _, ok := deps[producerPath]; ok {
+		t.Errorf("without namespace packages, producer.py should NOT be detected as depending on consumer.py, but got: %v", deps)
 	}
 }

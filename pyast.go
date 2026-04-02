@@ -132,12 +132,25 @@ type depPair struct {
 	isClass       bool   // is the imported object a class? if not, assume it's an absolute path
 }
 
+// BuildTreesOptions controls tree-building behavior.
+type BuildTreesOptions struct {
+	// NamespacePackages disables the __init__.py requirement when walking
+	// directories. Required for implicit namespace packages.
+	NamespacePackages bool
+}
+
+// BuildTrees builds import dependency trees for the given Python roots.
 func BuildTrees(ctx context.Context, pythonRoots file.Paths) *trees {
+	return BuildTreesWithOptions(ctx, pythonRoots, BuildTreesOptions{})
+}
+
+// BuildTreesWithOptions builds import dependency trees with configurable behavior.
+func BuildTreesWithOptions(ctx context.Context, pythonRoots file.Paths, opts BuildTreesOptions) *trees {
 	var wg sync.WaitGroup
 	c := make(chan tree)
 	for pythonRoot := range pythonRoots {
 		wg.Add(1)
-		go BuildTree(ctx, &wg, c, pythonRoot)
+		go buildTreeWithOptions(ctx, &wg, c, pythonRoot, opts)
 	}
 	go func() {
 		wg.Wait()
@@ -167,6 +180,10 @@ func BuildTrees(ctx context.Context, pythonRoots file.Paths) *trees {
 }
 
 func BuildTree(ctx context.Context, pwg *sync.WaitGroup, c chan tree, pythonRoot string) {
+	buildTreeWithOptions(ctx, pwg, c, pythonRoot, BuildTreesOptions{})
+}
+
+func buildTreeWithOptions(ctx context.Context, pwg *sync.WaitGroup, c chan tree, pythonRoot string, opts BuildTreesOptions) {
 	defer pwg.Done()
 	pythonRoot, err := filepath.Abs(pythonRoot)
 	if err != nil {
@@ -176,7 +193,7 @@ func BuildTree(ctx context.Context, pwg *sync.WaitGroup, c chan tree, pythonRoot
 	var wg sync.WaitGroup
 	depPairs := make(chan depPair)
 	wg.Add(1)
-	go buildDependencies(ctx, &wg, pythonRoot, depPairs)
+	go buildDependencies(ctx, &wg, pythonRoot, depPairs, opts.NamespacePackages)
 	go func() {
 		wg.Wait()
 		close(depPairs)
@@ -229,7 +246,7 @@ func (c *cache) Put(path string, classes Classes) {
 }
 */
 
-func buildDependencies(ctx context.Context, wg *sync.WaitGroup, pythonRoot string, depPairs chan depPair) {
+func buildDependencies(ctx context.Context, wg *sync.WaitGroup, pythonRoot string, depPairs chan depPair, namespacePackages bool) {
 	// this controls the maximum number of files being read
 	// concurrently, to avoid "too many open files" errors
 	defer wg.Done()
@@ -247,7 +264,7 @@ func buildDependencies(ctx context.Context, wg *sync.WaitGroup, pythonRoot strin
 	// FIXME: handle symlinks, either as files or directories
 	filepath.WalkDir(pythonRoot, func(path string, d fs.DirEntry, err error) error {
 		if d.IsDir() {
-			if path != pythonRoot && !file.FileExists(filepath.Join(path, "__init__.py")) {
+			if path != pythonRoot && !namespacePackages && !file.FileExists(filepath.Join(path, "__init__.py")) {
 				// log.Debugf("%v does not contain __init__.py so skipping.", path)
 				return fs.SkipDir
 			}
