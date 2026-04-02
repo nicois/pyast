@@ -123,6 +123,90 @@ func TestBuildTreesNamespacePackages(t *testing.T) {
 	}
 }
 
+func TestCrossRootDependees(t *testing.T) {
+	repoRoot, _ := filepath.Abs("testdata/crossroot/repo")
+	kafkaSrc, _ := filepath.Abs("testdata/crossroot/repo/py/kafka/src")
+
+	roots := file.CreatePaths(repoRoot, kafkaSrc)
+	opts := BuildTreesOptions{NamespacePackages: true}
+	trees := BuildTreesWithOptions(context.Background(), roots, opts)
+
+	consumerPath := filepath.Join(kafkaSrc, "avn/kafka/consumer.py")
+	deps, err := trees.GetDependees(file.CreatePaths(consumerPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	apiPath := filepath.Join(repoRoot, "aiven/acorn/api.py")
+	if _, ok := deps[apiPath]; !ok {
+		t.Errorf("expected aiven/acorn/api.py to depend on consumer.py via cross-root import\ngot: %v", deps)
+	}
+}
+
+func TestOverlappingRootPrefixes(t *testing.T) {
+	repoRoot, _ := filepath.Abs("testdata/crossroot/repo")
+	kafkaSrc, _ := filepath.Abs("testdata/crossroot/repo/py/kafka/src")
+
+	roots := file.CreatePaths(repoRoot, kafkaSrc)
+	opts := BuildTreesOptions{NamespacePackages: true}
+	trees := BuildTreesWithOptions(context.Background(), roots, opts)
+
+	consumerPath := filepath.Join(kafkaSrc, "avn/kafka/consumer.py")
+	class, ok := trees.pathToClassAcrossTrees(consumerPath)
+	if !ok {
+		t.Fatal("expected to find class for consumer.py")
+	}
+	if class != "avn.kafka.consumer" {
+		t.Errorf("expected class avn.kafka.consumer, got %s", class)
+	}
+}
+
+func TestCrossProjectAvnImports(t *testing.T) {
+	repoRoot, _ := filepath.Abs("testdata/crossroot/repo")
+	kafkaSrc, _ := filepath.Abs("testdata/crossroot/repo/py/kafka/src")
+	metricsSrc, _ := filepath.Abs("testdata/crossroot/repo/py/metrics/src")
+
+	roots := file.CreatePaths(repoRoot, kafkaSrc, metricsSrc)
+	opts := BuildTreesOptions{NamespacePackages: true}
+	trees := BuildTreesWithOptions(context.Background(), roots, opts)
+
+	consumerPath := filepath.Join(kafkaSrc, "avn/kafka/consumer.py")
+	deps, err := trees.GetDependees(file.CreatePaths(consumerPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	collectorPath := filepath.Join(metricsSrc, "avn/metrics/collector.py")
+	if _, ok := deps[collectorPath]; !ok {
+		t.Errorf("expected avn/metrics/collector.py to depend on avn/kafka/consumer.py\ngot: %v", deps)
+	}
+}
+
+func TestTransitiveCrossRootDeps(t *testing.T) {
+	repoRoot, _ := filepath.Abs("testdata/crossroot/repo")
+	kafkaSrc, _ := filepath.Abs("testdata/crossroot/repo/py/kafka/src")
+	metricsSrc, _ := filepath.Abs("testdata/crossroot/repo/py/metrics/src")
+
+	roots := file.CreatePaths(repoRoot, kafkaSrc, metricsSrc)
+	opts := BuildTreesOptions{NamespacePackages: true}
+	trees := BuildTreesWithOptions(context.Background(), roots, opts)
+
+	consumerPath := filepath.Join(kafkaSrc, "avn/kafka/consumer.py")
+	deps, err := trees.GetDependees(file.CreatePaths(consumerPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	apiPath := filepath.Join(repoRoot, "aiven/acorn/api.py")
+	collectorPath := filepath.Join(metricsSrc, "avn/metrics/collector.py")
+	if _, ok := deps[apiPath]; !ok {
+		t.Errorf("expected aiven/acorn/api.py in dependees, got: %v", deps)
+	}
+	if _, ok := deps[collectorPath]; !ok {
+		t.Errorf("expected avn/metrics/collector.py in dependees, got: %v", deps)
+	}
+}
+
 func TestBuildTreesBackwardCompat(t *testing.T) {
 	root, err := filepath.Abs("testdata/namespace/src")
 	if err != nil {

@@ -78,15 +78,85 @@ func (t *tree) getClassDependencies(wg *sync.WaitGroup, s seen, class string, re
 	}
 }
 
-func (t *trees) GetDependees(paths file.Paths) (file.Paths, error) {
-	// this is super fast; no need for goroutines
-	result := file.CreatePaths()
+// pathToClassAcrossTrees finds the correct class name for a file path.
+// Uses longest-prefix matching to handle overlapping roots.
+func (t *trees) pathToClassAcrossTrees(path string) (string, bool) {
+	var bestRoot string
 	for _, tree := range *t {
-		deps, err := tree.GetDependees(paths)
-		if err != nil {
-			return result, err
+		if strings.HasPrefix(path, tree.root+"/") {
+			if len(tree.root) > len(bestRoot) {
+				bestRoot = tree.root
+			}
 		}
-		result.Union(deps)
+	}
+	if bestRoot == "" {
+		return "", false
+	}
+	relative := path[len(bestRoot)+1:]
+	if class, err := PathToClass(relative); err == nil {
+		return class, true
+	}
+	return "", false
+}
+
+// getImportersAcrossTrees finds all classes that import the given class.
+func (t *trees) getImportersAcrossTrees(class string) Classes {
+	result := CreateClasses()
+	for _, tree := range *t {
+		if node, ok := tree.nodes[class]; ok {
+			result.Union(node.importers)
+		}
+	}
+	return result
+}
+
+// classToPathAcrossTrees converts a class name to a file path by checking
+// which tree root actually contains the file.
+func (t *trees) classToPathAcrossTrees(class string) (string, bool) {
+	for _, tree := range *t {
+		path := ClassToPath(tree.root, class)
+		if file.FileExists(path) {
+			return path, true
+		}
+	}
+	return "", false
+}
+
+func (t *trees) GetDependees(paths file.Paths) (file.Paths, error) {
+	result := file.CreatePaths()
+	seen := CreateClasses()
+
+	// Seed: convert input paths to class names using the correct tree
+	pending := CreateClasses()
+	for path := range paths {
+		if class, ok := t.pathToClassAcrossTrees(path); ok {
+			pending.Add(class)
+		}
+	}
+
+	// Iteratively resolve importers across all trees until stable
+	for len(pending) > 0 {
+		nextPending := CreateClasses()
+		for class := range pending {
+			if _, already := seen[class]; already {
+				continue
+			}
+			seen.Add(class)
+			importers := t.getImportersAcrossTrees(class)
+			for importer := range importers {
+				if _, already := seen[importer]; !already {
+					nextPending.Add(importer)
+				}
+			}
+		}
+		pending = nextPending
+	}
+
+	// Convert seen classes back to file paths
+	for class := range seen {
+		if path, ok := t.classToPathAcrossTrees(class); ok {
+			result.Add(path)
+		}
 	}
 	return result, nil
 }
